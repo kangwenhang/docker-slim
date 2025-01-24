@@ -6,9 +6,9 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"github.com/docker-slim/docker-slim/pkg/ipc/channel"
-	"github.com/docker-slim/docker-slim/pkg/ipc/command"
-	"github.com/docker-slim/docker-slim/pkg/ipc/event"
+	"github.com/slimtoolkit/slim/pkg/ipc/channel"
+	"github.com/slimtoolkit/slim/pkg/ipc/command"
+	"github.com/slimtoolkit/slim/pkg/ipc/event"
 )
 
 type Server struct {
@@ -100,6 +100,9 @@ func (s *Server) Run() error {
 		log.Errorf("sensor: ipc.Server.Run() - cmdChannel.Start error = %v\n", err)
 		return err
 	}
+
+	s.cmdChannel.WaitForConnection()
+	s.evtChannel.WaitForConnection()
 
 	go func() {
 		for {

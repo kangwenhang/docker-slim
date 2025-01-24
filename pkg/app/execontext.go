@@ -3,14 +3,21 @@ package app
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/fatih/color"
+	log "github.com/sirupsen/logrus"
 
-	"github.com/docker-slim/docker-slim/pkg/consts"
-	"github.com/docker-slim/docker-slim/pkg/util/errutil"
+	"github.com/slimtoolkit/slim/pkg/consts"
+	"github.com/slimtoolkit/slim/pkg/util/fsutil"
+	v "github.com/slimtoolkit/slim/pkg/version"
+)
+
+const (
+	ofJSON = "json"
+	ofText = "text"
 )
 
 type ExecutionContext struct {
@@ -46,33 +53,73 @@ func (ref *ExecutionContext) doCleanup() {
 func (ref *ExecutionContext) FailOn(err error) {
 	if err != nil {
 		ref.doCleanup()
+
+		//not using FailOn from errutil to control the flow/output better
+		stackData := debug.Stack()
+		log.WithError(err).WithFields(log.Fields{
+			"stack": string(stackData),
+		}).Error("terminating")
+
+		if ref.Out != nil {
+			ref.Out.Info("fail.on", OutVars{"version": v.Current()})
+		}
+
+		ref.exit(-1)
+	}
+}
+
+func (ref *ExecutionContext) Fail(reason string) {
+	ref.doCleanup()
+
+	//not using FailOn from errutil to control the flow/output better
+	stackData := debug.Stack()
+	log.WithFields(log.Fields{
+		"stack":  string(stackData),
+		"reason": reason,
+	}).Error("terminating")
+
+	if ref.Out != nil {
+		ref.Out.Info("fail.on", OutVars{"version": v.Current()})
 	}
 
-	errutil.FailOn(err)
+	ShowCommunityInfo(ref.Out.OutputFormat)
+	ref.exit(-1)
 }
 
 func (ref *ExecutionContext) exit(exitCode int) {
-	ShowCommunityInfo(ref.Out.JSONFlag)
+	if ref.Out != nil {
+		ref.Out.Info("exit", OutVars{
+			"code":     exitCode,
+			"version":  v.Current(),
+			"location": fsutil.ExeDir()})
+	}
+
+	ShowCommunityInfo(ref.Out.OutputFormat)
 	os.Exit(exitCode)
 }
 
-func NewExecutionContext(cmdName, jsonFlag string) *ExecutionContext {
+func NewExecutionContext(
+	cmdName string,
+	quiet bool,
+	outputFormat string) *ExecutionContext {
 	ref := &ExecutionContext{
-		Out: NewOutput(cmdName, jsonFlag),
+		Out: NewOutput(cmdName, quiet, outputFormat),
 	}
 
 	return ref
 }
 
 type Output struct {
-	CmdName  string
-	JSONFlag string
+	CmdName      string
+	Quiet        bool
+	OutputFormat string
 }
 
-func NewOutput(cmdName, jsonFlag string) *Output {
+func NewOutput(cmdName string, quiet bool, outputFormat string) *Output {
 	ref := &Output{
-		CmdName:  cmdName,
-		JSONFlag: jsonFlag,
+		CmdName:      cmdName,
+		Quiet:        quiet,
+		OutputFormat: outputFormat,
 	}
 
 	return ref
@@ -84,9 +131,13 @@ func NoColor() {
 
 type OutVars map[string]interface{}
 
-func (ref *Output) LogDump(logType, data string, params ...OutVars) {
+func (ref *Output) LogDump(logType string, data string, params ...OutVars) {
+	if ref.Quiet {
+		return
+	}
+
 	var info string
-	msg := make(map[string]string)
+	msg := map[string]string{}
 	var jsonData []byte
 
 	msg["cmd"] = ref.CmdName
@@ -108,26 +159,27 @@ func (ref *Output) LogDump(logType, data string, params ...OutVars) {
 			info = builder.String()
 		}
 	}
-	switch ref.JSONFlag {
-	case "json":
+	switch ref.OutputFormat {
+	case ofJSON:
 		jsonData, _ = json.Marshal(msg)
 		fmt.Println(string(jsonData))
-	case "text":
+	case ofText:
 		fmt.Printf("cmd=%s log='%s' event=LOG.START %s ====================\n", ref.CmdName, logType, info)
 		fmt.Println(data)
 		fmt.Printf("cmd=%s log='%s' event=LOG.END %s ====================\n", ref.CmdName, logType, info)
 	default:
-		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.JSONFlag)
+		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.OutputFormat)
 	}
 
 }
 
 func (ref *Output) Prompt(data string) {
-	color.Set(color.FgHiRed)
-	defer color.Unset()
+	if ref.Quiet {
+		return
+	}
 
-	switch ref.JSONFlag {
-	case "json":
+	switch ref.OutputFormat {
+	case ofJSON:
 		//marshal data to json
 		var jsonData []byte
 		if len(data) > 0 {
@@ -138,20 +190,24 @@ func (ref *Output) Prompt(data string) {
 			jsonData, _ = json.Marshal(msg)
 			fmt.Println(string(jsonData))
 		}
-	case "text":
+	case ofText:
+		color.Set(color.FgHiRed)
+		defer color.Unset()
+
 		fmt.Printf("cmd=%s prompt='%s'\n", ref.CmdName, data)
 	default:
-		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.JSONFlag)
+		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.OutputFormat)
 	}
 
 }
 
 func (ref *Output) Error(errType string, data string) {
-	color.Set(color.FgHiRed)
-	defer color.Unset()
+	if ref.Quiet {
+		return
+	}
 
-	switch ref.JSONFlag {
-	case "json":
+	switch ref.OutputFormat {
+	case ofJSON:
 		//marshal data to json
 		var jsonData []byte
 		if len(data) > 0 {
@@ -163,20 +219,24 @@ func (ref *Output) Error(errType string, data string) {
 			jsonData, _ = json.Marshal(msg)
 			fmt.Println(string(jsonData))
 		}
-	case "text":
+	case ofText:
+		color.Set(color.FgHiRed)
+		defer color.Unset()
+
 		fmt.Printf("cmd=%s error=%s message='%s'\n", ref.CmdName, errType, data)
 	default:
-		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.JSONFlag)
+		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.OutputFormat)
 	}
 
 }
 
 func (ref *Output) Message(data string) {
-	color.Set(color.FgHiMagenta)
-	defer color.Unset()
+	if ref.Quiet {
+		return
+	}
 
-	switch ref.JSONFlag {
-	case "json":
+	switch ref.OutputFormat {
+	case ofJSON:
 		//marshal data to json
 		var jsonData []byte
 		if len(data) > 0 {
@@ -187,19 +247,26 @@ func (ref *Output) Message(data string) {
 			jsonData, _ = json.Marshal(msg)
 			fmt.Println(string(jsonData))
 		}
-	case "text":
+	case ofText:
+		color.Set(color.FgHiMagenta)
+		defer color.Unset()
+
 		fmt.Printf("cmd=%s message='%s'\n", ref.CmdName, data)
 	default:
-		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.JSONFlag)
+		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.OutputFormat)
 	}
 
 }
 
 func (ref *Output) State(state string, params ...OutVars) {
+	if ref.Quiet {
+		return
+	}
+
 	var exitInfo string
 	var info string
 	var sep string
-	msg := make(map[string]string)
+	msg := map[string]string{}
 	var jsonData []byte
 	msg["cmd"] = ref.CmdName
 	msg["state"] = state
@@ -237,22 +304,22 @@ func (ref *Output) State(state string, params ...OutVars) {
 		}
 	}
 
-	if state == "exited" || strings.Contains(state, "error") {
-		color.Set(color.FgHiRed, color.Bold)
-	} else {
-		color.Set(color.FgCyan, color.Bold)
-	}
-	defer color.Unset()
-
-	switch ref.JSONFlag {
-	case "json":
+	switch ref.OutputFormat {
+	case ofJSON:
 		jsonData, _ = json.Marshal(msg)
 		fmt.Println(string(jsonData))
-	case "text":
+	case ofText:
+		if state == "exited" || strings.Contains(state, "error") {
+			color.Set(color.FgHiRed, color.Bold)
+		} else {
+			color.Set(color.FgCyan, color.Bold)
+		}
+		defer color.Unset()
+
 		fmt.Printf("cmd=%s state=%s%s%s%s\n", ref.CmdName, state, exitInfo, sep, info)
 
 	default:
-		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.JSONFlag)
+		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.OutputFormat)
 	}
 }
 
@@ -263,9 +330,13 @@ var (
 )
 
 func (ref *Output) Info(infoType string, params ...OutVars) {
+	if ref.Quiet {
+		return
+	}
+
 	var data string
 	var sep string
-	msg := make(map[string]string)
+	msg := map[string]string{}
 	var jsonData []byte
 	msg["cmd"] = ref.CmdName
 	msg["info"] = infoType
@@ -288,65 +359,59 @@ func (ref *Output) Info(infoType string, params ...OutVars) {
 		}
 	}
 
-	switch ref.JSONFlag {
-	case "json":
+	switch ref.OutputFormat {
+	case ofJSON:
 		jsonData, _ = json.Marshal(msg)
 		fmt.Println(string(jsonData))
-	case "text":
+	case ofText:
 		fmt.Printf("cmd=%s info=%s%s%s\n", ref.CmdName, itcolor(infoType), sep, data)
 
 	default:
-		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.JSONFlag)
+		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", ref.OutputFormat)
 	}
 
 }
 
-func ShowCommunityInfo(jsonFlag string) {
-
-	type Data struct {
+func ShowCommunityInfo(outputFormat string) {
+	lines := []struct {
 		App     string `json:"app"`
 		Message string `json:"message"`
 		Info    string `json:"info"`
+	}{
+		{
+			App:     consts.AppName,
+			Message: "GitHub Discussions",
+			Info:    consts.CommunityDiscussions,
+		},
+		{
+			App:     consts.AppName,
+			Message: "Join the CNCF Slack channel to ask questions or to share your feedback",
+			Info:    consts.CommunityCNCFSlack,
+		},
+		{
+			App:     consts.AppName,
+			Message: "Join the Discord server to ask questions or to share your feedback",
+			Info:    consts.CommunityDiscord,
+		},
+		{
+			App:     consts.AppName,
+			Message: "Join the Gitter channel to ask questions or to share your feedback",
+			Info:    consts.CommunityGitter,
+		},
 	}
 
-	type CommunityInfo struct {
-		Data []Data `json:"data"`
-	}
-
-	var data Data
-	var community CommunityInfo
-
-	color.Set(color.FgHiMagenta)
-	defer color.Unset()
-
-	data.App = "docker-slim"
-	data.Message = "Join the Gitter channel to ask questions or to share your feedback"
-	data.Info = consts.CommunityGitter
-
-	community.Data = append(community.Data, data)
-
-	data.App = "docker-slim"
-	data.Message = "Join the Discord server to ask questions or to share your feedback"
-	data.Info = consts.CommunityDiscord
-
-	community.Data = append(community.Data, data)
-
-	data.App = "docker-slim"
-	data.Message = "GitHub Discussions"
-	data.Info = consts.CommunityDiscussions
-
-	community.Data = append(community.Data, data)
-
-	switch jsonFlag {
-	case "json":
-		var jsonData []byte
-		jsonData, _ = json.Marshal(community.Data)
-		fmt.Println(string(jsonData))
-	case "text":
-		for _, v := range community.Data {
-			fmt.Printf("'app':'%s' 'message':'%s' 'info':'%s'\n", v.App, v.Message, v.Info)
+	switch outputFormat {
+	case ofJSON:
+		for _, v := range lines {
+			jsonData, _ := json.Marshal(v)
+			fmt.Println(string(jsonData))
 		}
 	default:
-		log.Fatalf("Unknown console output flag: %s\n. It should be either 'text' or 'json", jsonFlag)
+		color.Set(color.FgHiMagenta)
+		defer color.Unset()
+
+		for _, v := range lines {
+			fmt.Printf("app='%s' message='%s' info='%s'\n", v.App, v.Message, v.Info)
+		}
 	}
 }

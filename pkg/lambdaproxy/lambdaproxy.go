@@ -64,7 +64,7 @@ type HTTPResponse struct {
 	Body       string   `json:"body"`
 }
 
-//encode and decode options - future placeholder for v1 and v2 options of lambda results
+// encode and decode options - future placeholder for v1 and v2 options of lambda results
 type EncodeOptions struct {
 	version string `json:"version"`
 }
@@ -156,7 +156,7 @@ func convertMapToSlice(input map[string]string) []string {
 	// Convert map to slice of keys.
 	//since map is unordered we need to sort the keys.
 	keys := make([]string, 0, len(input))
-	for key, _ := range input {
+	for key := range input {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
