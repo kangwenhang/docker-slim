@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	docker "github.com/fsouza/go-dockerclient"
 
-	"github.com/docker-slim/docker-slim/pkg/consts"
-	v "github.com/docker-slim/docker-slim/pkg/version"
+	"github.com/slimtoolkit/slim/pkg/consts"
+	v "github.com/slimtoolkit/slim/pkg/version"
 )
 
 // note: dup (todo: refactor)
@@ -49,7 +49,8 @@ const (
 )
 
 // GenerateFromInfo builds and saves a Dockerfile file object
-func GenerateFromInfo(location string,
+func GenerateFromInfo(
+	location string,
 	volumes map[string]struct{},
 	workingDir string,
 	env []string,
@@ -66,7 +67,7 @@ func GenerateFromInfo(location string,
 	var dfData bytes.Buffer
 	dfData.WriteString("FROM scratch\n")
 
-	dsInfoLabel := fmt.Sprintf("LABEL %s=\"%s\"\n", consts.ContainerLabelName, v.Current())
+	dsInfoLabel := fmt.Sprintf("LABEL %s=\"%s\"\n", consts.DSLabelVersion, v.Current())
 	dfData.WriteString(dsInfoLabel)
 
 	if len(labels) > 0 {
@@ -158,5 +159,5 @@ func GenerateFromInfo(location string,
 		dfData.WriteByte('\n')
 	}
 
-	return ioutil.WriteFile(dockerfileLocation, dfData.Bytes(), 0644)
+	return os.WriteFile(dockerfileLocation, dfData.Bytes(), 0644)
 }
